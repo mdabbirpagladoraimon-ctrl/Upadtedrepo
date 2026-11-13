@@ -1,0 +1,584 @@
+{# TEMPLATE: base.html #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}{{ site.site_title or 'FILEWALE PREMIUM' }}{% endblock %}</title>
+<link rel="stylesheet" href="/static.css">
+</head>
+<body>
+<nav class="nav">
+  <a class="brand" href="{{ url_for('home') }}">FILE<span>WALE</span> <em>PREMIUM</em></a>
+  <button class="nav-toggle" onclick="document.body.classList.toggle('nav-open')">☰</button>
+  <div class="nav-links">
+    <a href="{{ url_for('home') }}">Home</a>
+    <a href="{{ url_for('store') }}">Store</a>
+    <a href="{{ url_for('silver') }}">Silver</a>
+    <a href="{{ url_for('golden') }}">Golden</a>
+    {% if current_user %}
+      <a href="{{ url_for('wallet') }}">Wallet <b>৳{{ '%.2f'|format(current_user.balance) }}</b></a>
+      <a href="{{ url_for('purchases') }}">Purchases</a>
+      {% if is_admin %}<a href="{{ url_for('admin_dashboard') }}" class="btn-ghost">Admin</a>{% endif %}
+      <a href="{{ url_for('logout') }}">Logout</a>
+    {% else %}
+      <a href="{{ url_for('login') }}">Login</a>
+      <a href="{{ url_for('register') }}" class="btn-primary">Register</a>
+    {% endif %}
+  </div>
+</nav>
+{% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}
+    <div class="flash-wrap">
+      {% for cat, m in msgs %}<div class="flash flash-{{cat}}">{{ m }}</div>{% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+<main class="page fade-in">
+{% block content %}{% endblock %}
+</main>
+<footer class="foot">© {{ site.site_title or 'FILEWALE PREMIUM' }} — PREMIUM ACCESS. HALF THE PRICE.</footer>
+<script src="/static.js"></script>
+</body>
+</html>
+
+{# TEMPLATE: home.html #}
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div class="hero-inner">
+    <h1 class="hero-title">FILE<span>WALE</span> <em>PREMIUM</em></h1>
+    <p class="hero-sub">PREMIUM ACCESS. HALF THE PRICE.</p>
+    <div class="live-stock" id="liveStock">
+      <span class="dot dot-live pulse"></span>
+      <span class="ls-label">LIVE STOCK:</span>
+      <span class="ls-count" id="stockCount">{{ stock_count }}</span>
+    </div>
+    <div class="hero-cta">
+      <a href="{{ url_for('silver') }}" class="btn-silver">SILVER PLAN</a>
+      <a href="{{ url_for('golden') }}" class="btn-gold">GOLDEN PLAN</a>
+    </div>
+  </div>
+  <div class="hero-particles"><i></i><i></i><i></i><i></i><i></i></div>
+</section>
+
+{% if site.silver_banner_enabled == '1' %}
+<a class="banner banner-silver" href="{{ url_for('silver') }}">
+  <div class="banner-inner">{{ site.silver_banner_text or 'SILVER PLAN — Metallic Access. Half the Price.' }}</div>
+</a>
+{% endif %}
+{% if site.golden_banner_enabled == '1' %}
+<a class="banner banner-gold" href="{{ url_for('golden') }}">
+  <div class="banner-inner">{{ site.golden_banner_text or 'GOLDEN PLAN — Royal Tier. Premium Everything.' }}</div>
+</a>
+{% endif %}
+{% endblock %}
+
+{# TEMPLATE: store.html #}
+{% extends "base.html" %}
+{% block title %}{% if category %}{{ category|upper }} — FILEWALE{% else %}Store — FILEWALE{% endif %}{% endblock %}
+{% block content %}
+<h2 class="section-title">
+  {% if category == 'silver' %}SILVER PLAN
+  {% elif category == 'gold' %}GOLDEN PLAN
+  {% else %}ALL PLANS{% endif %}
+</h2>
+<div class="grid">
+{% for it in items %}
+  <div class="card card-{{ 'gold' if it.plan_category=='gold' else 'silver' }}">
+    <div class="badge badge-{{ 'gold' if it.plan_category=='gold' else 'silver' }}">
+      {{ 'GOLDEN PREMIUM' if it.plan_category=='gold' else 'SILVER PLAN' }}
+    </div>
+    <div class="card-title">{{ it.plan_name or 'FILEWALE PLAN' }}</div>
+    <div class="row"><span>Original</span><b>{{ it.original_currency or 'USD' }} {{ '%.2f'|format(it.original_price or 0) }}</b></div>
+    <div class="row"><span>Our Price</span><b class="price">৳{{ '%.2f'|format(it.selling_price) }}</b></div>
+    <div class="row"><span>Discount</span><b class="disc">50% OFF</b></div>
+    {% if it.days_left is not none %}
+    <div class="row"><span>Remaining</span><b>{{ it.days_left }} Days</b></div>
+    {% endif %}
+    <div class="row status status-{{ it.status|lower }}">
+      <span class="dot dot-{{ it.status|lower }}"></span> {{ it.status }}
+    </div>
+    {% if current_user %}
+    <form method="post" action="{{ url_for('buy', acc_id=it.id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button class="btn-buy">BUY NOW</button>
+    </form>
+    {% else %}
+    <a class="btn-buy" href="{{ url_for('login') }}">LOGIN TO BUY</a>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="empty">No accounts in stock right now. Check back soon.</div>
+{% endfor %}
+</div>
+{% endblock %}
+
+{# TEMPLATE: login.html #}
+{% extends "base.html" %}
+{% block content %}
+<div class="auth-card">
+  <h2>LOGIN</h2>
+  <form method="post">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <label>Username</label><input name="username" required>
+    <label>Password</label><input type="password" name="password" required>
+    <button class="btn-primary">Sign In</button>
+  </form>
+  <p class="muted">No account? <a href="{{ url_for('register') }}">Register</a></p>
+</div>
+{% endblock %}
+
+{# TEMPLATE: register.html #}
+{% extends "base.html" %}
+{% block content %}
+<div class="auth-card">
+  <h2>CREATE ACCOUNT</h2>
+  <form method="post">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <label>Username</label><input name="username" required minlength="3">
+    <label>Email (optional)</label><input type="email" name="email">
+    <label>Password (min 6)</label><input type="password" name="password" required minlength="6">
+    <button class="btn-primary">Create</button>
+  </form>
+  <p class="muted">Have an account? <a href="{{ url_for('login') }}">Login</a></p>
+</div>
+{% endblock %}
+
+{# TEMPLATE: wallet.html #}
+{% extends "base.html" %}
+{% block content %}
+<h2 class="section-title">MY WALLET</h2>
+<div class="wallet-balance">
+  <span>Available Balance</span>
+  <b>৳{{ '%.2f'|format(current_user.balance) }}</b>
+  <a class="btn-primary" href="{{ url_for('add_balance') }}">ADD BALANCE</a>
+</div>
+
+<h3 class="sub-title">Pending Deposits</h3>
+<table class="table">
+  <thead><tr><th>#</th><th>Amount</th><th>Method</th><th>Txn ID</th><th>Status</th><th>Date</th></tr></thead>
+  <tbody>
+  {% for d in deposits %}
+    <tr>
+      <td>{{ d.id }}</td>
+      <td>৳{{ '%.2f'|format(d.amount) }}</td>
+      <td>{{ d.method|upper }}</td>
+      <td class="mono">{{ d.txn_id }}</td>
+      <td><span class="tag tag-{{ d.status|lower }}">{{ d.status }}</span></td>
+      <td class="muted">{{ d.created_at }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">no deposits yet</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3 class="sub-title">Recent Activity</h3>
+<table class="table">
+  <thead><tr><th>#</th><th>Type</th><th>Amount</th><th>Balance</th><th>Reason</th><th>Date</th></tr></thead>
+  <tbody>
+  {% for t in txns %}
+    <tr>
+      <td>{{ t.id }}</td>
+      <td><span class="tag">{{ t.type }}</span></td>
+      <td class="{{ 'pos' if t.amount>0 else 'neg' }}">{{ '+' if t.amount>0 else '' }}{{ '%.2f'|format(t.amount) }}</td>
+      <td>৳{{ '%.2f'|format(t.balance_after) }}</td>
+      <td class="muted">{{ t.reason }}</td>
+      <td class="muted">{{ t.created_at }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">no transactions yet</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{# TEMPLATE: add_balance.html #}
+{% extends "base.html" %}
+{% block content %}
+<h2 class="section-title">ADD BALANCE</h2>
+<div class="pay-instructions">
+  <div class="pay-card pay-bkash">
+    <h3>bKash</h3>
+    <p class="mono big">{{ cfg.BKASH_NUMBER }}</p>
+    <p class="muted">Send Money → Personal</p>
+  </div>
+  <div class="pay-card pay-nagad">
+    <h3>Nagad</h3>
+    <p class="mono big">{{ cfg.NAGAD_NUMBER }}</p>
+    <p class="muted">Send Money → Personal</p>
+  </div>
+</div>
+<form class="form-narrow" method="post">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <label>Amount (BDT)</label>
+  <input type="number" name="amount" step="0.01" min="10" required>
+  <label>Payment Method</label>
+  <select name="method" required>
+    <option value="bkash">bKash</option>
+    <option value="nagad">Nagad</option>
+  </select>
+  <label>Transaction ID</label>
+  <input name="txn_id" required minlength="4" maxlength="64" placeholder="paste the TrxID">
+  <button class="btn-primary">Submit for Verification</button>
+  <p class="muted small">Admin verifies manually — usually within a few minutes.</p>
+</form>
+{% endblock %}
+
+{# TEMPLATE: purchases.html #}
+{% extends "base.html" %}
+{% block content %}
+<h2 class="section-title">MY PURCHASES</h2>
+<div class="grid">
+{% for p in purchases %}
+  <div class="card card-{{ 'gold' if p.plan_category=='gold' else 'silver' }}">
+    <div class="badge badge-{{ 'gold' if p.plan_category=='gold' else 'silver' }}">
+      {{ 'GOLDEN' if p.plan_category=='gold' else 'SILVER' }}
+    </div>
+    <div class="card-title">{{ p.plan_name or 'FILEWALE PLAN' }}</div>
+    <div class="row"><span>Paid</span><b class="price">৳{{ '%.2f'|format(p.amount) }}</b></div>
+    {% if p.expiry_date %}<div class="row"><span>Expires</span><b>{{ p.expiry_date }}</b></div>{% endif %}
+    <div class="creds">
+      <div><span>Email</span><code>{{ p.email }}</code></div>
+      <div><span>Password</span><code>{{ p.password }}</code></div>
+    </div>
+    <div class="muted small">purchased {{ p.created_at }}</div>
+  </div>
+{% else %}
+  <div class="empty">No purchases yet.</div>
+{% endfor %}
+</div>
+{% endblock %}
+
+{# TEMPLATE: transactions.html #}
+{% extends "base.html" %}
+{% block content %}
+<h2 class="section-title">TRANSACTION HISTORY</h2>
+<table class="table">
+  <thead><tr><th>#</th><th>Type</th><th>Amount</th><th>Balance</th><th>Reason</th><th>Date</th></tr></thead>
+  <tbody>
+  {% for t in txns %}
+    <tr>
+      <td>{{ t.id }}</td>
+      <td><span class="tag">{{ t.type }}</span></td>
+      <td class="{{ 'pos' if t.amount>0 else 'neg' }}">{{ '+' if t.amount>0 else '' }}{{ '%.2f'|format(t.amount) }}</td>
+      <td>৳{{ '%.2f'|format(t.balance_after) }}</td>
+      <td class="muted">{{ t.reason }}</td>
+      <td class="muted">{{ t.created_at }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">none</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{# TEMPLATE: profile.html #}
+{% extends "base.html" %}
+{% block content %}
+<h2 class="section-title">MY PROFILE</h2>
+<div class="profile-card">
+  <div class="row"><span>Username</span><b>{{ u.username }}</b></div>
+  <div class="row"><span>Email</span><b>{{ u.email or '—' }}</b></div>
+  <div class="row"><span>Balance</span><b>৳{{ '%.2f'|format(u.balance) }}</b></div>
+  <div class="row"><span>Member since</span><b>{{ u.created_at }}</b></div>
+</div>
+{% endblock %}
+
+{# TEMPLATE: admin_login.html #}
+{% extends "base.html" %}
+{% block content %}
+<div class="auth-card">
+  <h2>ADMIN LOGIN</h2>
+  <form method="post">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <label>Admin Username</label><input name="username" required autofocus>
+    <label>Password</label><input type="password" name="password" required>
+    <button class="btn-primary">Enter</button>
+  </form>
+</div>
+{% endblock %}
+
+{# TEMPLATE: admin_base.html #}
+{% extends "base.html" %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-side">
+    <a href="{{ url_for('admin_dashboard') }}">Overview</a>
+    <a href="{{ url_for('admin_stock') }}">Account Stock</a>
+    <a href="{{ url_for('admin_add_account') }}">Add New Account</a>
+    <a href="{{ url_for('admin_stock') }}?cat=silver">Silver Plans</a>
+    <a href="{{ url_for('admin_stock') }}?cat=gold">Golden Plans</a>
+    <a href="{{ url_for('admin_sold') }}">Sold Accounts</a>
+    <a href="{{ url_for('admin_users') }}">Users</a>
+    <a href="{{ url_for('admin_deposits') }}">Payment Verification</a>
+    <a href="{{ url_for('admin_transactions') }}">Transactions</a>
+    <a href="{{ url_for('admin_banner') }}">Banner Settings</a>
+    <a href="{{ url_for('admin_settings') }}">Website Settings</a>
+    <a href="{{ url_for('logout') }}">Logout</a>
+  </aside>
+  <section class="admin-main">
+    {% block admin %}{% endblock %}
+  </section>
+</div>
+{% endblock %}
+
+{# TEMPLATE: admin_dashboard.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">OVERVIEW</h2>
+<div class="stats">
+  <div class="stat"><span>Total Users</span><b>{{ stats.users }}</b></div>
+  <div class="stat"><span>In Stock</span><b class="pos">{{ stats.stock }}</b></div>
+  <div class="stat"><span>Sold</span><b>{{ stats.sold }}</b></div>
+  <div class="stat"><span>Pending Deposits</span><b class="neg">{{ stats.pending }}</b></div>
+  <div class="stat"><span>Revenue</span><b>৳{{ '%.2f'|format(stats.revenue) }}</b></div>
+</div>
+{% endblock %}
+
+{# TEMPLATE: admin_stock.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">ACCOUNT STOCK</h2>
+<table class="table">
+<thead>
+<tr><th>ID</th><th>Plan</th><th>Cat</th><th>Original</th><th>Sell</th><th>Status</th><th>Sold</th><th>Actions</th></tr>
+</thead>
+<tbody>
+{% for r in rows %}
+<tr>
+  <td>{{ r.id }}</td>
+  <td>{{ r.plan_name or '—' }}</td>
+  <td><span class="tag tag-{{ r.plan_category }}">{{ r.plan_category|upper }}</span></td>
+  <td>{{ r.original_currency or '' }} {{ '%.2f'|format(r.original_price or 0) }}</td>
+  <td>৳{{ '%.2f'|format(r.selling_price) }}</td>
+  <td><span class="tag tag-{{ r.status|lower }}">{{ r.status }}</span></td>
+  <td>{{ 'YES' if r.sold else 'NO' }}</td>
+  <td class="actions">
+    {% if not r.sold %}
+      <a class="btn-mini" href="{{ url_for('admin_edit_account', acc_id=r.id) }}">Edit</a>
+      <form method="post" action="{{ url_for('admin_sync', acc_id=r.id) }}" style="display:inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button class="btn-mini">Sync</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_delete_account', acc_id=r.id) }}" style="display:inline"
+            onsubmit="return confirm('Delete account {{ r.id }}?')">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button class="btn-mini btn-danger">Del</button>
+      </form>
+    {% else %}
+      <span class="muted small">sold</span>
+    {% endif %}
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="8" class="muted">no accounts in stock</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
+
+{# TEMPLATE: admin_add_account.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">ADD NEW ACCOUNT</h2>
+<form method="post" class="form-grid">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <label>Account Email / ID</label><input name="email" required>
+  <label>Account Password</label><input name="password" required>
+  <label>Plan Category Override</label>
+  <select name="plan_category">
+    <option value="auto">Auto (from API plan name)</option>
+    <option value="silver">Force Silver</option>
+    <option value="gold">Force Gold</option>
+  </select>
+  <label>Manual Original Price (if API doesn't return)</label>
+  <input type="number" step="0.01" name="original_price" placeholder="leave blank to use API">
+  <label>Currency</label>
+  <input name="original_currency" placeholder="USD" value="USD" maxlength="6">
+  <label>Manual Selling Price (optional override)</label>
+  <input type="number" step="0.01" name="selling_price" placeholder="leave blank = 50% of original">
+  <label>Purchase Cost (internal)</label>
+  <input type="number" step="0.01" name="cost" placeholder="0">
+  <label>Notes</label>
+  <textarea name="notes" rows="2"></textarea>
+  <button class="btn-primary">Add to Stock</button>
+</form>
+<p class="muted small">The server calls FileWale login + subscription to read plan price / name / expiry. If that call fails and no manual original price is entered, the account is not saved.</p>
+{% endblock %}
+
+{# TEMPLATE: admin_edit_account.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">EDIT ACCOUNT #{{ row.id }}</h2>
+<form method="post" class="form-grid">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <label>Selling Price (BDT)</label>
+  <input type="number" step="0.01" name="selling_price" value="{{ row.selling_price }}" required>
+  <label>Plan Category</label>
+  <select name="plan_category">
+    <option value="silver" {{ 'selected' if row.plan_category=='silver' else '' }}>Silver</option>
+    <option value="gold" {{ 'selected' if row.plan_category=='gold' else '' }}>Gold</option>
+  </select>
+  <label>Status</label>
+  <select name="status">
+    {% for s in ['LIVE','OFFLINE','EXPIRED'] %}
+      <option value="{{ s }}" {{ 'selected' if row.status==s else '' }}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <label>Notes</label>
+  <textarea name="notes" rows="3">{{ row.notes or '' }}</textarea>
+  <button class="btn-primary">Save Changes</button>
+</form>
+{% endblock %}
+
+{# TEMPLATE: admin_users.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">USERS</h2>
+<table class="table">
+<thead><tr><th>ID</th><th>User</th><th>Balance</th><th>Admin</th><th>Joined</th><th>Wallet Op</th></tr></thead>
+<tbody>
+{% for u in rows %}
+<tr>
+  <td>{{ u.id }}</td>
+  <td>{{ u.username }}</td>
+  <td>৳{{ '%.2f'|format(u.balance) }}</td>
+  <td>{{ 'YES' if u.is_admin else '—' }}</td>
+  <td class="muted">{{ u.created_at }}</td>
+  <td>
+    <form method="post" action="{{ url_for('admin_wallet_op') }}" class="inline-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="user_id" value="{{ u.id }}">
+      <input type="number" step="0.01" name="amount" placeholder="+/-" required style="width:90px">
+      <input name="reason" placeholder="reason" required style="width:140px">
+      <button class="btn-mini">Apply</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
+
+{# TEMPLATE: admin_deposits.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">PAYMENT VERIFICATION</h2>
+<table class="table">
+<thead><tr><th>#</th><th>User</th><th>Amount</th><th>Method</th><th>TrxID</th><th>Status</th><th>Date</th><th>Action</th></tr></thead>
+<tbody>
+{% for d in rows %}
+<tr>
+  <td>{{ d.id }}</td>
+  <td>{{ d.username }}</td>
+  <td>৳{{ '%.2f'|format(d.amount) }}</td>
+  <td>{{ d.method|upper }}</td>
+  <td class="mono">{{ d.txn_id }}</td>
+  <td><span class="tag tag-{{ d.status|lower }}">{{ d.status }}</span></td>
+  <td class="muted">{{ d.created_at }}</td>
+  <td>
+    {% if d.status == 'PENDING' %}
+    <form method="post" action="{{ url_for('admin_deposit_action', dep_id=d.id, action='approve') }}" class="inline-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input name="admin_note" placeholder="note" style="width:120px">
+      <button class="btn-mini btn-ok">Approve</button>
+    </form>
+    <form method="post" action="{{ url_for('admin_deposit_action', dep_id=d.id, action='reject') }}" class="inline-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button class="btn-mini btn-danger">Reject</button>
+    </form>
+    {% else %}
+      <span class="muted small">{{ d.admin_note or '—' }}</span>
+    {% endif %}
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="8" class="muted">no deposits</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
+
+{# TEMPLATE: admin_transactions.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">ALL TRANSACTIONS</h2>
+<table class="table">
+<thead><tr><th>#</th><th>User</th><th>Type</th><th>Amount</th><th>Balance</th><th>Reason</th><th>Date</th></tr></thead>
+<tbody>
+{% for t in rows %}
+<tr>
+  <td>{{ t.id }}</td>
+  <td>{{ t.username }}</td>
+  <td>{{ t.type }}</td>
+  <td class="{{ 'pos' if t.amount>0 else 'neg' }}">{{ '%.2f'|format(t.amount) }}</td>
+  <td>৳{{ '%.2f'|format(t.balance_after) }}</td>
+  <td class="muted">{{ t.reason }}</td>
+  <td class="muted">{{ t.created_at }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
+
+{# TEMPLATE: admin_banner.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">BANNER SETTINGS</h2>
+<form method="post" class="form-narrow">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <label class="checkbox"><input type="checkbox" name="silver_banner_enabled" {{ 'checked' if s.silver_banner_enabled=='1' else '' }}> Enable Silver banner</label>
+  <label>Silver banner text</label>
+  <input name="silver_banner_text" value="{{ s.silver_banner_text or '' }}">
+  <label class="checkbox"><input type="checkbox" name="golden_banner_enabled" {{ 'checked' if s.golden_banner_enabled=='1' else '' }}> Enable Golden banner</label>
+  <label>Golden banner text</label>
+  <input name="golden_banner_text" value="{{ s.golden_banner_text or '' }}">
+  <button class="btn-primary">Save Banners</button>
+</form>
+{% endblock %}
+
+{# TEMPLATE: admin_settings.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">WEBSITE SETTINGS</h2>
+<form method="post" class="form-narrow">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <label>Site title</label>
+  <input name="site_title" value="{{ s.site_title or 'FILEWALE PREMIUM' }}">
+  <button class="btn-primary">Save</button>
+</form>
+{% endblock %}
+
+{# TEMPLATE: admin_sold.html #}
+{% extends "admin_base.html" %}
+{% block admin %}
+<h2 class="section-title">SOLD ACCOUNTS</h2>
+<table class="table">
+<thead><tr><th>#</th><th>Plan</th><th>Buyer</th><th>Price</th><th>Sold At</th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr>
+  <td>{{ r.id }}</td>
+  <td>{{ r.plan_name or '—' }}</td>
+  <td>{{ r.buyer or '—' }}</td>
+  <td>৳{{ '%.2f'|format(r.selling_price) }}</td>
+  <td class="muted">{{ r.sold_at or '—' }}</td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">nothing sold yet</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
+
+{# TEMPLATE: error.html #}
+{% extends "base.html" %}
+{% block content %}
+<div class="auth-card">
+  <h2>ERROR {{ code }}</h2>
+  <p class="muted">{{ msg }}</p>
+  <a class="btn-primary" href="{{ url_for('home') }}">Back Home</a>
+</div>
+{% endblock %}
