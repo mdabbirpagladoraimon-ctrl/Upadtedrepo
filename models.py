@@ -1,187 +1,165 @@
+import os
 import sqlite3
-import json
-from datetime import datetime, timezone
 from werkzeug.security import generate_password_hash
-from config import Config
+from cryptography.fernet import Fernet
 
-def get_db_connection():
-    conn = sqlite3.connect(Config.DATABASE_URL, timeout=15.0)
+
+# ------------------------------------------------------------------
+# Paths — Render has an ephemeral FS. If /data exists (mounted disk),
+# persist the DB + encryption key there so nothing gets wiped.
+# ------------------------------------------------------------------
+_DATA_DIR = "/data" if os.path.isdir("/data") and os.access("/data", os.W_OK) else "."
+
+DB_PATH = os.getenv("DATABASE") or os.path.join(_DATA_DIR, "filewale.db")
+KEY_PATH = os.path.join(_DATA_DIR, "_enc.key")
+
+
+# ------------------------------------------------------------------
+# Encryption helpers (Fernet — symmetric, at rest)
+# ------------------------------------------------------------------
+def _load_or_create_key() -> bytes:
+    env_key = (os.getenv("ENC_KEY") or "").strip()
+    if env_key:
+        return env_key.encode()
+    if os.path.exists(KEY_PATH):
+        with open(KEY_PATH, "rb") as f:
+            return f.read().strip()
+    k = Fernet.generate_key()
+    with open(KEY_PATH, "wb") as f:
+        f.write(k)
+    try:
+        os.chmod(KEY_PATH, 0o600)
+    except OSError:
+        pass
+    return k
+
+
+_FERNET = None
+
+
+def fernet() -> Fernet:
+    global _FERNET
+    if _FERNET is None:
+        _FERNET = Fernet(_load_or_create_key())
+    return _FERNET
+
+
+def enc(plain: str) -> str:
+    return fernet().encrypt(plain.encode()).decode()
+
+
+def dec(cipher: str) -> str:
+    return fernet().decrypt(cipher.encode()).decode()
+
+
+# ------------------------------------------------------------------
+# DB
+# ------------------------------------------------------------------
+def get_db():
+    conn = sqlite3.connect(DB_PATH, timeout=15, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def init_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
+    c = get_db()
+    c.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT,
+            password_hash TEXT NOT NULL,
+            balance REAL NOT NULL DEFAULT 0,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
 
-    cur.executescript("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'user',
-        wallet_balance REAL NOT NULL DEFAULT 0.0,
-        total_deposits REAL NOT NULL DEFAULT 0.0,
-        total_purchases REAL NOT NULL DEFAULT 0.0,
-        is_active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL
-    );
+        CREATE TABLE IF NOT EXISTS accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_enc TEXT NOT NULL,
+            password_enc TEXT NOT NULL,
+            plan_name TEXT,
+            plan_category TEXT NOT NULL DEFAULT 'silver',
+            original_price REAL,
+            original_currency TEXT DEFAULT 'USD',
+            selling_price REAL NOT NULL,
+            cost REAL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'LIVE',
+            expiry_date TEXT,
+            last_sync TEXT,
+            notes TEXT,
+            sold INTEGER NOT NULL DEFAULT 0,
+            sold_to INTEGER,
+            sold_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
 
-    CREATE TABLE IF NOT EXISTS accounts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        identifier TEXT NOT NULL,
-        encrypted_password TEXT NOT NULL,
-        encrypted_access_token TEXT DEFAULT '',
-        plan_category TEXT NOT NULL DEFAULT 'SILVER',
-        category_override INTEGER NOT NULL DEFAULT 0,
-        fw_plan_name TEXT NOT NULL DEFAULT 'Unknown Plan',
-        original_price REAL NOT NULL DEFAULT 0.0,
-        original_currency TEXT NOT NULL DEFAULT 'BDT',
-        purchase_cost REAL NOT NULL DEFAULT 0.0,
-        selling_price REAL NOT NULL DEFAULT 0.0,
-        price_override INTEGER NOT NULL DEFAULT 0,
-        discount_pct INTEGER NOT NULL DEFAULT 50,
-        stock_status TEXT NOT NULL DEFAULT 'AVAILABLE',
-        live_status TEXT NOT NULL DEFAULT 'CHECKING',
-        sub_status TEXT DEFAULT 'UNKNOWN',
-        start_date TEXT DEFAULT '',
-        end_date TEXT DEFAULT '',
-        remaining_days INTEGER DEFAULT 0,
-        max_downloads INTEGER DEFAULT 0,
-        max_bandwidth_gb REAL DEFAULT 0.0,
-        max_devices INTEGER DEFAULT 0,
-        daily_download_limit INTEGER DEFAULT 0,
-        daily_bandwidth_limit_gb REAL DEFAULT 0.0,
-        download_count INTEGER DEFAULT 0,
-        bandwidth_used_gb REAL DEFAULT 0.0,
-        fw_username TEXT DEFAULT '',
-        fw_user_id TEXT DEFAULT '',
-        fw_full_name TEXT DEFAULT '',
-        fw_country TEXT DEFAULT '',
-        fw_city TEXT DEFAULT '',
-        fw_2fa INTEGER DEFAULT 0,
-        fw_email_verified INTEGER DEFAULT 0,
-        fw_mobile_verified INTEGER DEFAULT 0,
-        fw_wallet_balance REAL DEFAULT 0.0,
-        fw_wallet_currency TEXT DEFAULT 'BDT',
-        admin_notes TEXT DEFAULT '',
-        last_synced_at TEXT DEFAULT '',
-        buyer_id INTEGER DEFAULT NULL,
-        sold_at TEXT DEFAULT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(buyer_id) REFERENCES users(id)
-    );
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            amount REAL NOT NULL,
+            balance_after REAL NOT NULL,
+            reason TEXT,
+            meta TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
 
-    CREATE TABLE IF NOT EXISTS deposits (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        amount REAL NOT NULL,
-        payment_method TEXT NOT NULL,
-        transaction_id TEXT UNIQUE NOT NULL,
-        status TEXT NOT NULL DEFAULT 'PENDING',
-        admin_note TEXT DEFAULT '',
-        verified_by INTEGER DEFAULT NULL,
-        created_at TEXT NOT NULL,
-        verified_at TEXT DEFAULT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id)
-    );
+        CREATE TABLE IF NOT EXISTS deposits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            method TEXT NOT NULL,
+            txn_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            admin_note TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            verified_at TEXT,
+            verified_by INTEGER
+        );
 
-    CREATE TABLE IF NOT EXISTS purchases (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        account_id INTEGER UNIQUE NOT NULL,
-        plan_name TEXT NOT NULL,
-        plan_category TEXT NOT NULL,
-        original_price REAL NOT NULL,
-        original_currency TEXT NOT NULL,
-        paid_price REAL NOT NULL,
-        purchased_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id),
-        FOREIGN KEY(account_id) REFERENCES accounts(id)
-    );
+        CREATE TABLE IF NOT EXISTS purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            account_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
 
-    CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        tx_type TEXT NOT NULL,
-        amount REAL NOT NULL,
-        balance_after REAL NOT NULL,
-        reference TEXT DEFAULT '',
-        description TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id)
-    );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
 
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_txn ON deposits(txn_id);
+        CREATE INDEX IF NOT EXISTS idx_accounts_sold ON accounts(sold, status);
+        CREATE INDEX IF NOT EXISTS idx_tx_user ON transactions(user_id, id DESC);
 
-    CREATE TABLE IF NOT EXISTS audit_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        actor_id INTEGER,
-        actor_username TEXT,
-        action TEXT NOT NULL,
-        details TEXT DEFAULT '',
-        ip_address TEXT DEFAULT '',
-        created_at TEXT NOT NULL
-    );
-    """)
+        INSERT OR IGNORE INTO settings (key, value) VALUES
+            ('silver_banner_enabled', '1'),
+            ('golden_banner_enabled', '1'),
+            ('silver_banner_text', 'SILVER PLAN — Metallic Access, Half the Price.'),
+            ('golden_banner_text', 'GOLDEN PLAN — Royal Tier. Premium Everything.'),
+            ('site_title', 'FILEWALE PREMIUM');
+        """
+    )
+    c.close()
 
-    # Seed initial Admin from environment variables
-    admin_user = Config.ADMIN_USERNAME.strip()
-    admin_pass = Config.ADMIN_PASSWORD
-    cur.execute("SELECT id FROM users WHERE username = ?", (admin_user,))
-    if not cur.fetchone():
-        cur.execute("""
-            INSERT INTO users (username, email, password_hash, role, wallet_balance, created_at)
-            VALUES (?, ?, ?, 'admin', 0.0, ?)
-        """, (
-            admin_user,
-            f"{admin_user.lower()}@filewalepremium.store",
-            generate_password_hash(admin_pass),
-            now_iso()
-        ))
 
-    # Seed default banners & site settings
-    default_settings = {
-        "site_title": "FILEWALE PREMIUM",
-        "hero_subtitle": "PREMIUM ACCESS. HALF THE PRICE.",
-        "bkash_number": Config.BKASH_NUMBER,
-        "nagad_number": Config.NAGAD_NUMBER,
-        "usd_to_bdt_rate": "120.0",
-        "silver_banner_enabled": "1",
-        "silver_banner_title": "SILVER ELITE TIER — 50% OFF OFFICIAL PRICE",
-        "silver_banner_text": "High-speed verified FileWale Silver subscriptions with instant automated credential delivery.",
-        "golden_banner_enabled": "1",
-        "golden_banner_title": "ROYAL GOLDEN TIER — MAXIMUM BANDWIDTH AT 50% OFF",
-        "golden_banner_text": "Unrestricted priority FileWale Golden plans with live status monitoring and full warranty."
-    }
-    for k, v in default_settings.items():
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
-
-    conn.commit()
-    conn.close()
-
-def get_settings_dict() -> dict:
-    conn = get_db_connection()
-    rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    conn.close()
-    return {r["key"]: r["value"] for r in rows}
-
-def log_audit(actor_id, actor_username: str, action: str, details: str = "", ip_address: str = ""):
-    try:
-        conn = get_db_connection()
-        conn.execute("""
-            INSERT INTO audit_logs (actor_id, actor_username, action, details, ip_address, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (actor_id, actor_username, action, details, ip_address, now_iso()))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
+def ensure_admin(username: str, password: str):
+    """Idempotent — safe on every boot."""
+    c = get_db()
+    row = c.execute("SELECT id, is_admin FROM users WHERE username=?", (username,)).fetchone()
+    if row:
+        if not row["is_admin"]:
+            c.execute("UPDATE users SET is_admin=1 WHERE id=?", (row["id"],))
+    else:
+        c.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?,?,1)",
+            (username, generate_password_hash(password)),
+        )
+    c.close()
